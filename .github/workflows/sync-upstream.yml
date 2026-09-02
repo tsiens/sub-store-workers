@@ -127,6 +127,25 @@ jobs:
         working-directory: sub-store-workers
         run: npm ci
 
+      - name: Increase QuickJS memory limit
+        if: steps.check.outputs.needed == 'true'
+        working-directory: sub-store-workers
+        run: |
+          FILE=src/vendor/quickjs-executor.js
+          echo "Before:"
+          grep -n 'setMemoryLimit' "$FILE" || true
+          if grep -Fq 'runtime.setMemoryLimit(1024 * 512);' "$FILE"; then
+            sed -i 's/runtime\.setMemoryLimit(1024 \* 512);/runtime.setMemoryLimit(1024 * 1024 * 16);/' "$FILE"
+          elif grep -Fq 'runtime.setMemoryLimit(1024 * 1024 * 16);' "$FILE"; then
+            echo "QuickJS memory limit is already 16 MiB"
+          else
+            echo "::error::Upstream QuickJS memory-limit line changed; refusing to build without applying the 16 MiB patch"
+            grep -n 'setMemoryLimit' "$FILE" || true
+            exit 1
+          fi
+          echo "After:"
+          grep -n 'setMemoryLimit' "$FILE"
+
       - name: Build worker
         if: steps.check.outputs.needed == 'true'
         working-directory: sub-store-workers
