@@ -211,7 +211,7 @@ Pages 不是另一套数据，而是同一个后端的备用访问入口：
 
 如果关闭 Pages，请使用 Workers 地址；如果 Workers 在当前网络不可访问，则需要重新启用 Pages。
 
-### 4. 获取 Pages 后端地址
+### 4. 获取后端地址
 
 打开 Cloudflare：
 
@@ -219,9 +219,11 @@ Pages 不是另一套数据，而是同一个后端的备用访问入口：
 https://dash.cloudflare.com/<ACCOUNT_ID>/workers-and-pages
 ```
 
-进入刚创建的 Pages 项目，复制 Pages 域名。
+#### Pages 后端地址
 
-后端地址格式：
+如果启用了 Pages，进入刚创建的 Pages 项目，复制 Pages 域名。
+
+Pages 后端地址格式：
 
 ```text
 https://<PAGES_DOMAIN>/<PASSWORD>
@@ -238,16 +240,41 @@ https://sub-store-example.pages.dev/sub-store-password
 - `<PAGES_DOMAIN>` 是 Cloudflare Pages 显示的域名
 - `<PASSWORD>` 是 `SUB_STORE_FRONTEND_BACKEND_PATH` 去掉开头 `/` 后的内容
 
+#### Workers 后端地址
+
+Workers 名称固定为 `sub-store`。如果 `WORKERS_SUBDOMAIN` 填写的是 `example`，则 Workers 域名为：
+
+```text
+https://sub-store.example.workers.dev
+```
+
+Workers 后端地址格式：
+
+```text
+https://sub-store.<WORKERS_SUBDOMAIN>.workers.dev/<PASSWORD>
+```
+
+例如：
+
+```text
+https://sub-store.example.workers.dev/sub-store-password
+```
+
+其中 `<PASSWORD>` 与 Pages 后端地址使用相同的密码。
+
+推荐优先使用 Pages 地址连接前端；Workers 地址可用于备用访问和 Cron 运行。`NO_PAGE=true` 时不会创建 Pages，只能使用 Workers 地址。
+
 ### 5. 连接 Sub-Store 前端
 
 打开官方前端：
 
 https://sub-store.vercel.app/subs
 
-在前端设置中填写后端地址：
+在前端设置中填写 Pages 或 Workers 后端地址：
 
 ```text
 https://<PAGES_DOMAIN>/<PASSWORD>
+https://sub-store.<WORKERS_SUBDOMAIN>.workers.dev/<PASSWORD>
 ```
 
 也可以使用一键连接地址：
