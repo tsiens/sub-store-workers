@@ -4,6 +4,8 @@
 
 本项目只提供后端 API，不托管 Sub-Store 前端页面。访问后端根地址时跳转到官方前端是正常行为。
 
+Workers 是主要运行环境，负责 API 和定时任务。部分中国境内网络无法直接访问 `workers.dev`，因此项目默认同时部署 Pages；`pages.dev` 通常可以在中国境内直连。Pages 可以通过 `NO_PAGE` Secret 关闭。
+
 ## 使用流程
 
 ### 1. Fork 仓库
@@ -35,6 +37,7 @@ Settings
 | `PAGES_PROJECT_NAME` | Cloudflare Pages 项目名称 |
 | `SUB_STORE_FRONTEND_BACKEND_PATH` | 后端访问密钥，必须以 `/` 开头 |
 | `WORKERS_SUBDOMAIN` | Workers 子域名 |
+| `NO_PAGE` | 是否关闭 Pages，留空或填 `false` 表示部署 Pages |
 
 #### `CLOUDFLARE_ACCOUNT_ID`
 
@@ -143,6 +146,22 @@ example
 
 不要填写完整的 `example.workers.dev`。
 
+#### `NO_PAGE`
+
+这是可选 Secret。
+
+留空、删除，或填写：
+
+```text
+false
+```
+
+表示部署 Pages。
+
+填写其他非空值（推荐填写 `true`）表示不部署 Pages。如果已经存在同名 Pages 项目，GitHub Actions 会自动将其删除。
+
+注意：关闭 Pages 后，只会保留 Workers 部署。中国境内如果无法访问 `workers.dev`，将无法通过 Pages 域名访问后端。
+
 ### 3. 第一次运行 GitHub Actions
 
 进入自己仓库的：
@@ -175,12 +194,22 @@ true
 4. 创建并部署 Cloudflare Worker
 5. 绑定 `SUB_STORE_DATA`
 6. 写入 `SUB_STORE_FRONTEND_BACKEND_PATH`
-7. 创建并部署 Cloudflare Pages
-8. 将 Pages 绑定到同一个 KV
-9. 写入 Pages Secret
+7. 根据 `NO_PAGE` 设置创建或删除 Pages
+8. 如果启用 Pages，则将其绑定到同一个 KV
+9. 如果启用 Pages，则写入 Pages Secret 并部署
 10. 执行健康检查
 
-后续 GitHub Actions 会每天自动检查上游更新。只有检测到上游发生变化时才会重新部署。
+后续 GitHub Actions 会每天自动检查上游更新。只有检测到上游发生变化时才会重新部署；如果修改了 `NO_PAGE`，请手动运行 workflow 并将 `force` 设置为 `true`，使 Pages 开关立即生效。
+
+### Pages 的作用
+
+Pages 不是另一套数据，而是同一个后端的备用访问入口：
+
+- Workers：负责运行 API、Cron 和后台逻辑
+- Pages：使用同一个 KV 和鉴权密钥，提供 `pages.dev` 访问地址
+- 中国境内无法访问 `workers.dev` 时，可以使用 Pages 地址连接前端
+
+如果关闭 Pages，请使用 Workers 地址；如果 Workers 在当前网络不可访问，则需要重新启用 Pages。
 
 ### 4. 获取 Pages 后端地址
 

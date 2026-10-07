@@ -60,6 +60,42 @@ jobs:
           echo "sha=$LAST" >> $GITHUB_OUTPUT
           echo "Last synced: $LAST"
 
+      - name: Reconcile Pages mode
+        id: pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PAGES_PROJECT_NAME: ${{ secrets.PAGES_PROJECT_NAME }}
+          NO_PAGE: ${{ secrets.NO_PAGE }}
+        run: |
+          set -euo pipefail
+
+          NO_PAGE_VALUE=$(printf '%s' "${NO_PAGE:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+          if [ -z "$NO_PAGE_VALUE" ] || [ "$NO_PAGE_VALUE" = "false" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Pages deployment is enabled"
+            exit 0
+          fi
+
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          echo "Pages deployment is disabled by NO_PAGE"
+
+          API_ROOT="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
+          PROJECT_URL="${API_ROOT}/pages/projects/${PAGES_PROJECT_NAME}"
+          AUTH=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H "Content-Type: application/json")
+          STATUS=$(curl -sS -o /tmp/pages-mode-project.json -w '%{http_code}' "$PROJECT_URL" "${AUTH[@]}")
+
+          if [ "$STATUS" = "200" ]; then
+            echo "Deleting existing Pages project '$PAGES_PROJECT_NAME'"
+            curl -fsS -X DELETE "$PROJECT_URL" "${AUTH[@]}" >/tmp/pages-project-delete.json
+          elif [ "$STATUS" = "404" ]; then
+            echo "Pages project '$PAGES_PROJECT_NAME' does not exist"
+          else
+            echo "::error::Failed to inspect Pages project '$PAGES_PROJECT_NAME' (HTTP $STATUS)"
+            cat /tmp/pages-mode-project.json
+            exit 1
+          fi
+
       - name: Check if update needed
         id: check
         run: |
@@ -259,7 +295,7 @@ jobs:
             npx wrangler secret put SUB_STORE_FRONTEND_BACKEND_PATH
 
       - name: Ensure Pages project and bind KV
-        if: steps.check.outputs.needed == 'true'
+        if: steps.check.outputs.needed == 'true' && steps.pages.outputs.enabled == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -310,7 +346,7 @@ jobs:
           echo "Pages project is ready and SUB_STORE_DATA is bound"
 
       - name: Set Pages secret
-        if: steps.check.outputs.needed == 'true'
+        if: steps.check.outputs.needed == 'true' && steps.pages.outputs.enabled == 'true'
         working-directory: sub-store-workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -325,7 +361,7 @@ jobs:
               --env production
 
       - name: Prepare Pages bundle
-        if: steps.check.outputs.needed == 'true'
+        if: steps.check.outputs.needed == 'true' && steps.pages.outputs.enabled == 'true'
         working-directory: sub-store-workers
         run: |
           mkdir -p pages-dist
@@ -333,7 +369,7 @@ jobs:
           cp dist/quickjs.wasm pages-dist/quickjs.wasm
 
       - name: Deploy Pages
-        if: steps.check.outputs.needed == 'true'
+        if: steps.check.outputs.needed == 'true' && steps.pages.outputs.enabled == 'true'
         working-directory: sub-store-workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -374,6 +410,11 @@ jobs:
             echo "| 上次同步 SHA | \`${{ steps.last.outputs.sha }}\` |"
             echo "| Worker 原始大小 | ${{ steps.size.outputs.kb }} KB (${{ steps.size.outputs.mb }} MB) |"
             echo "| Worker gzip 大小 | ${{ steps.size.outputs.gzip_kb }} KB |"
+            if [ "${{ steps.pages.outputs.enabled }}" = "true" ]; then
+              echo "| Pages | deployed |"
+            else
+              echo "| Pages | disabled and removed |"
+            fi
             echo ""
             if [ "${{ steps.last.outputs.sha }}" != "none" ] && [ "${{ steps.last.outputs.sha }}" != "${{ steps.upstream.outputs.sha }}" ]; then
               echo "**上游 diff**: https://github.com/sub-store-org/Sub-Store/compare/${{ steps.last.outputs.sha }}...${{ steps.upstream.outputs.sha }}"
@@ -397,7 +438,12 @@ jobs:
           BARK_KEY: ${{ secrets.BARK_KEY }}
         run: |
           TITLE=$(printf 'Sub-Store %%E5%%B7%%B2%%E6%%9B%%B4%%E6%%96%%B0' | sed 's/%%/%/g')
-          curl -s "https://api.day.app/${BARK_KEY}/Sub-Store%20${{ steps.upstream.outputs.version }}/Workers%20%2B%20Pages%20deployed"
+          if [ "${{ steps.pages.outputs.enabled }}" = "true" ]; then
+            TARGETS="Workers%20%2B%20Pages"
+          else
+            TARGETS="Workers"
+          fi
+          curl -s "https://api.day.app/${BARK_KEY}/Sub-Store%20${{ steps.upstream.outputs.version }}/${TARGETS}%20deployed"
 
       - name: Bark notify failure
         if: failure() && env.BARK_KEY != ''
