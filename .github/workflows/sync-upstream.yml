@@ -177,6 +177,40 @@ jobs:
             echo "::warning::Worker bundle gzipped size ${GZIP_KB} KB exceeds Cloudflare free tier 3 MiB limit (paid plan required)"
           fi
 
+      - name: Ensure KV namespace
+        if: steps.check.outputs.needed == 'true'
+        id: kv
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          KV_NAMESPACE: ${{ secrets.KV_NAMESPACE }}
+        run: |
+          set -euo pipefail
+
+          API="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/storage/kv/namespaces"
+          AUTH=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H "Content-Type: application/json")
+
+          LIST=$(curl -fsS "${API}?per_page=1000" "${AUTH[@]}")
+          KV_ID=$(printf '%s' "$LIST" | jq -r --arg title "$KV_NAMESPACE" \
+            '.result[] | select(.title == $title) | .id' | sed -n '1p')
+
+          if [ -z "$KV_ID" ]; then
+            echo "KV namespace '$KV_NAMESPACE' does not exist; creating it"
+            CREATED=$(curl -fsS -X POST "$API" "${AUTH[@]}" \
+              --data "$(jq -n --arg title "$KV_NAMESPACE" '{title: $title}')")
+            KV_ID=$(printf '%s' "$CREATED" | jq -r '.result.id // empty')
+          else
+            echo "Using existing KV namespace '$KV_NAMESPACE'"
+          fi
+
+          if [ -z "$KV_ID" ]; then
+            echo "::error::Failed to resolve KV namespace '$KV_NAMESPACE'"
+            exit 1
+          fi
+
+          echo "namespace_id=$KV_ID" >> "$GITHUB_OUTPUT"
+          echo "KV namespace id resolved"
+
       - name: Generate wrangler.toml
         if: steps.check.outputs.needed == 'true'
         working-directory: sub-store-workers
@@ -200,7 +234,7 @@ jobs:
           SUB_STORE_BACKEND_CUSTOM_ICON = "https://cdn.jsdelivr.net/gh/Yu9191/sub-store-workers@main/png/cloudflare.png"
           TOML
           sed -i 's/^          //' wrangler.toml
-          sed -i "s/__KV_ID__/${{ secrets.KV_NAMESPACE_ID }}/" wrangler.toml
+          sed -i "s/__KV_ID__/${{ steps.kv.outputs.namespace_id }}/" wrangler.toml
           echo "Generated wrangler.toml:"
           cat wrangler.toml
 
@@ -211,6 +245,84 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx wrangler deploy
+
+      - name: Set Workers secret
+        if: steps.check.outputs.needed == 'true'
+        working-directory: sub-store-workers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SUB_STORE_FRONTEND_BACKEND_PATH: ${{ secrets.SUB_STORE_FRONTEND_BACKEND_PATH }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$SUB_STORE_FRONTEND_BACKEND_PATH" |
+            npx wrangler secret put SUB_STORE_FRONTEND_BACKEND_PATH
+
+      - name: Ensure Pages project and bind KV
+        if: steps.check.outputs.needed == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          KV_NAMESPACE_ID: ${{ steps.kv.outputs.namespace_id }}
+          PAGES_PROJECT_NAME: ${{ secrets.PAGES_PROJECT_NAME }}
+        run: |
+          set -euo pipefail
+
+          API_ROOT="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}"
+          PROJECT_URL="${API_ROOT}/pages/projects/${PAGES_PROJECT_NAME}"
+          AUTH=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" -H "Content-Type: application/json")
+
+          STATUS=$(curl -sS -o /tmp/pages-project.json -w '%{http_code}' "$PROJECT_URL" "${AUTH[@]}")
+          if [ "$STATUS" = "404" ]; then
+            echo "Pages project '$PAGES_PROJECT_NAME' does not exist; creating it"
+            curl -fsS -X POST "${API_ROOT}/pages/projects" "${AUTH[@]}" \
+              --data "$(jq -n --arg name "$PAGES_PROJECT_NAME" \
+                '{
+                  name: $name,
+                  production_branch: "main",
+                  deployment_configs: {
+                    production: {},
+                    preview: {}
+                  }
+                }')" >/tmp/pages-project-create.json
+          elif [ "$STATUS" != "200" ]; then
+            echo "::error::Failed to inspect Pages project '$PAGES_PROJECT_NAME' (HTTP $STATUS)"
+            cat /tmp/pages-project.json
+            exit 1
+          else
+            echo "Using existing Pages project '$PAGES_PROJECT_NAME'"
+          fi
+
+          curl -fsS -X PATCH "$PROJECT_URL" "${AUTH[@]}" \
+            --data "$(jq -n --arg kv "$KV_NAMESPACE_ID" '{
+              deployment_configs: {
+                production: {
+                  kv_namespaces: {
+                    SUB_STORE_DATA: { namespace_id: $kv }
+                  },
+                  env_vars: {
+                    SCRIPT_ENGINE: { value: "quickjs", type: "plain_text" }
+                  }
+                }
+              }
+            }')" >/tmp/pages-project-config.json
+
+          echo "Pages project is ready and SUB_STORE_DATA is bound"
+
+      - name: Set Pages secret
+        if: steps.check.outputs.needed == 'true'
+        working-directory: sub-store-workers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PAGES_PROJECT_NAME: ${{ secrets.PAGES_PROJECT_NAME }}
+          SUB_STORE_FRONTEND_BACKEND_PATH: ${{ secrets.SUB_STORE_FRONTEND_BACKEND_PATH }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$SUB_STORE_FRONTEND_BACKEND_PATH" |
+            npx wrangler pages secret put SUB_STORE_FRONTEND_BACKEND_PATH \
+              --project-name "$PAGES_PROJECT_NAME" \
+              --env production
 
       - name: Prepare Pages bundle
         if: steps.check.outputs.needed == 'true'
@@ -232,37 +344,6 @@ jobs:
             --branch main \
             --commit-message "upstream ${{ steps.upstream.outputs.version }}" \
             --commit-dirty=true
-
-      - name: Set Pages environment variables
-        if: steps.check.outputs.needed == 'true'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          PAGES_PROJECT_NAME: ${{ secrets.PAGES_PROJECT_NAME }}
-        run: |
-          echo "Setting SCRIPT_ENGINE=quickjs for Pages project: ${PAGES_PROJECT_NAME}"
-          RESP=$(curl -s -X PATCH \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT_NAME}" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "deployment_configs": {
-                "production": {
-                  "env_vars": {
-                    "SCRIPT_ENGINE": {
-                      "value": "quickjs",
-                      "type": "plain_text"
-                    }
-                  }
-                }
-              }
-            }')
-          SUCCESS=$(echo "$RESP" | jq -r '.success // false')
-          if [ "$SUCCESS" = "true" ]; then
-            echo "Pages environment variables set successfully"
-          else
-            echo "::warning::Failed to set Pages environment variables: $(echo "$RESP" | jq -r '.errors // []')"
-          fi
 
       - name: Health check
         if: steps.check.outputs.needed == 'true'
