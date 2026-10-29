@@ -163,6 +163,11 @@ jobs:
         working-directory: sub-store-workers
         run: npm ci
 
+      - name: Test Workers response usage
+        if: steps.check.outputs.needed == 'true'
+        working-directory: sub-store-workers
+        run: npm test
+
       - name: Increase QuickJS memory limit
         if: steps.check.outputs.needed == 'true'
         working-directory: sub-store-workers

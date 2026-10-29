@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "build": "node esbuild.js",
+    "test": "node --test test/*.test.cjs",
     "dev": "wrangler dev",
     "deploy": "npm run build && wrangler deploy",
     "deploy:pages": "npm run build && node -e \"const fs=require('fs');fs.mkdirSync('pages-dist',{recursive:true});fs.copyFileSync('dist/worker.js','pages-dist/_worker.js');fs.copyFileSync('dist/quickjs.wasm','pages-dist/quickjs.wasm')\" && wrangler pages deploy pages-dist --project-name sub-store --branch main",

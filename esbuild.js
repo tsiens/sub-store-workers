@@ -2,6 +2,7 @@
 const { build } = require('esbuild');
 const path = require('path');
 const fs = require('fs');
+const { patchFileUsage } = require('./scripts/file-usage-patch.cjs');
 
 // 路径配置
 const WORKERS_SRC = path.resolve(__dirname, 'src');
@@ -122,6 +123,10 @@ const evalRewritePlugin = {
     return createScriptFunction(script, name, $arguments, $options);
 }`,
                 );
+            }
+
+            if (args.path.endsWith(path.join('restful', 'response-transformer.js'))) {
+                contents = patchFileUsage(contents);
             }
 
             if (contents !== original) {

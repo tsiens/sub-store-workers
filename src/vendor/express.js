@@ -119,24 +119,37 @@ export default function express({ substore: $ }) {
 
         const res = {
             req, // 反向引用
+            get statusCode() {
+                return resStatusCode;
+            },
+            getHeaders() {
+                return Object.fromEntries(Object.entries(resHeaders)
+                    .map(([key, value]) => [key.toLowerCase(), value]));
+            },
+            getHeader(key) {
+                return this.getHeaders()[String(key).toLowerCase()];
+            },
             status(code) {
                 resStatusCode = code;
                 return this;
             },
             set(key, val) {
                 if (typeof key === 'object') {
-                    Object.assign(resHeaders, key);
+                    Object.entries(key).forEach(([name, value]) => this.setHeader(name, value));
                 } else {
-                    resHeaders[key] = val;
+                    this.setHeader(key, val);
                 }
                 return this;
             },
             setHeader(key, val) {
-                resHeaders[key] = val;
+                this.removeHeader(key);
+                resHeaders[String(key).toLowerCase()] = val;
                 return this;
             },
             removeHeader(key) {
-                delete resHeaders[key];
+                for (const name of Object.keys(resHeaders)) {
+                    if (name.toLowerCase() === String(key).toLowerCase()) delete resHeaders[name];
+                }
                 return this;
             },
             send(body = '') {
